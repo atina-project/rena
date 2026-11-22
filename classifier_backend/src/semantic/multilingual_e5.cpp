@@ -22,7 +22,7 @@ std::shared_ptr<multilingual_e5> multilingual_e5::create(const std::vector<core:
 
 std::vector<core::classification_result> multilingual_e5::classify(const core::classification_input& input) {
     const std::string& text = input.text;
-    auto query_emb = this->_encode_text("query: " + text);
+    auto query_emb = this->_encode_text("passage: " + text);
     if (query_emb.empty())
     {
         return {};
@@ -104,8 +104,7 @@ bool multilingual_e5::_init(const std::vector<core::category>& categories, const
     cparams.n_ubatch = n_ctx;
     cparams.embeddings = true;
     cparams.pooling_type = LLAMA_POOLING_TYPE_MEAN;
-    const int32_t default_threads =
-        std::max<int32_t>(1, static_cast<int32_t>(std::thread::hardware_concurrency() / 2));
+    const int32_t default_threads = std::max<int32_t>(1, static_cast<int32_t>(std::thread::hardware_concurrency() / 2));
     const int32_t n_threads = (config.n_threads > 0) ? config.n_threads : default_threads;
     cparams.n_threads = n_threads;
     cparams.n_threads_batch = n_threads;
@@ -120,7 +119,7 @@ bool multilingual_e5::_init(const std::vector<core::category>& categories, const
     this->_category_embds.reserve(categories.size());
     for (const auto& it : categories)
     {
-        std::string text = "passage: " + ((it.prompt.empty()) ? it.description : it.prompt);
+        std::string text = "query: " + (it.prompt.empty() ? it.description : it.prompt);
         auto emb = this->_encode_text(text);
         if (emb.empty())
         {
