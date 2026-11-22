@@ -45,7 +45,8 @@ namespace rena::core {
 
     struct classification_result {
         int category_id;
-        double similarity;
+        double score;
+        double raw_score;
     }; // struct classification_result
 
     // clang-format on

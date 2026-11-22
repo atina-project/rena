@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <thread>
-#include <unordered_set>
 
 using namespace rena;
 using namespace rena::classifier_backend::semantic;
@@ -28,26 +27,16 @@ std::vector<core::classification_result> multilingual_e5::classify(const core::c
         return {};
     } // failed to encode text
 
-    std::unordered_set<int> filter;
-    if (!input.candidate_category_ids.empty())
-    {
-        filter.insert(input.candidate_category_ids.begin(), input.candidate_category_ids.end());
-    } // input has specified category filters
-
-    std::vector<core::classification_result> results;
-    results.reserve(this->_category_embds.size());
-
+    std::vector<std::pair<int, double>> raw_scores;
+    raw_scores.reserve(this->_category_embds.size());
     for (const auto& [it_id, it_emb] : this->_category_embds)
     {
-        if (!filter.empty() && filter.find(it_id) == filter.end())
-        {
-            continue;
-        } // category not in filter
-        results.push_back({ it_id, builtin::embedding_utils::dot_product(query_emb, it_emb) });
+        raw_scores.emplace_back(it_id, builtin::embedding_utils::dot_product(query_emb, it_emb));
     }
 
-    std::sort(results.begin(), results.end(), [](const auto& a, const auto& b) { return a.similarity > b.similarity; });
-    return results;
+    const double tau = (this->_temperature > 0.0f) ? this->_temperature : 0.01;
+    constexpr double bg_similarity = 0.75;
+    return builtin::embedding_utils::temperature_softmax(raw_scores, tau, bg_similarity, input.candidate_category_ids);
 }
 
 multilingual_e5::~multilingual_e5() {
@@ -79,6 +68,7 @@ bool multilingual_e5::_init(const std::vector<core::category>& categories, const
         return false;
     } // failed to load model
 
+    this->_temperature = config.temperature;
     this->_vocab = llama_model_get_vocab(this->_model);
     this->_n_embd = llama_model_n_embd(this->_model);
     switch (this->_n_embd)

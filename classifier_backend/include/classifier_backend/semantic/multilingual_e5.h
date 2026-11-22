@@ -50,6 +50,7 @@ namespace rena::classifier_backend::semantic {
             llama_context* _ctx = nullptr;
             const llama_vocab* _vocab = nullptr;
             int32_t _n_embd = 0;
+            float _temperature = 0.01;
 
             std::vector<std::pair<int, std::vector<float>>> _category_embds;
     };
