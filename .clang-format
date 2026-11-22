@@ -17,6 +17,11 @@ SpacesBeforeTrailingComments: 1
 AlignTrailingComments: true
 AlignEscapedNewlines: Left
 
+AlwaysBreakTemplateDeclarations: Yes
+SpaceAfterTemplateKeyword: false
+PackConstructorInitializers: Never
+IndentCaseLabels: true
+
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterClass: false
