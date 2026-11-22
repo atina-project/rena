@@ -5,6 +5,7 @@ set(RENA_CLASSIFIER_BACKEND_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/include"
 )
 set(RENA_CLASSIFIER_BACKEND_SRC_LIST
     ${PROJECT_SOURCE_DIR}/src/builtin/embedding_utils.cpp
+    ${PROJECT_SOURCE_DIR}/src/semantic/embedding_gemma.cpp
     ${PROJECT_SOURCE_DIR}/src/semantic/llama_backend.cpp
     ${PROJECT_SOURCE_DIR}/src/semantic/multilingual_e5.cpp
 )

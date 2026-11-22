@@ -33,8 +33,9 @@ namespace rena::classifier_backend::semantic {
             multilingual_e5(multilingual_e5&&) = delete;
             multilingual_e5& operator=(multilingual_e5&&) = delete;
 
-            std::vector<core::classification_result> classify(const core::classification_input& input,
-                                                              core::common::span<int> candidate_category_ids = {}) override;
+            std::vector<core::classification_result>
+            classify(const core::classification_input& input,
+                     core::common::span<int> candidate_category_ids = {}) override;
 
             std::string_view get_model_name() const noexcept override;
             core::common::span<core::lang> get_supported_langs() const noexcept override;
