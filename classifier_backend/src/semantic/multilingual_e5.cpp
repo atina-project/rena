@@ -35,7 +35,7 @@ std::vector<core::classification_result> multilingual_e5::classify(const core::c
         raw_scores.emplace_back(it_id, builtin::embedding_utils::dot_product(query_emb, it_emb));
     }
 
-    const double tau = (this->_temperature > 0.0f) ? this->_temperature : 0.01;
+    const double tau = (this->_temperature > 0) ? this->_temperature : 0.01;
     constexpr double bg_similarity = 0.75;
     return builtin::embedding_utils::temperature_softmax(raw_scores, tau, bg_similarity, candidate_category_ids);
 }
@@ -72,24 +72,33 @@ bool multilingual_e5::_init(const std::vector<core::category>& categories, const
     this->_temperature = config.temperature;
     this->_vocab = llama_model_get_vocab(this->_model);
     this->_n_embd = llama_model_n_embd(this->_model);
-    switch (this->_n_embd)
+
+    char meta_buf[128] = {};
+    if (llama_model_meta_val_str(this->_model, "general.name", meta_buf, sizeof(meta_buf)) > 0)
     {
-        case 384:
-            this->_model_name = "multilingual-e5-small";
-            break;
-        case 768:
-            this->_model_name = "multilingual-e5-base";
-            break;
-        case 1024:
-            this->_model_name = "multilingual-e5-large";
-            break;
-        default:
-            this->_model_name = "multilingual-e5-unknown";
-            break;
-    } // set model name
+        this->_model_name = meta_buf;
+    } // get model name, set if exists
+    else
+    {
+        switch (this->_n_embd)
+        {
+            case 384:
+                this->_model_name = "multilingual-e5-small";
+                break;
+            case 768:
+                this->_model_name = "multilingual-e5-base";
+                break;
+            case 1024:
+                this->_model_name = "multilingual-e5-large";
+                break;
+            default:
+                this->_model_name = "multilingual-e5-unknown";
+                break;
+        } // set model name with n_embd
+    }
 
     llama_context_params cparams = llama_context_default_params();
-    uint32_t n_ctx = static_cast<uint32_t>(llama_model_n_ctx_train(this->_model));
+    uint32_t n_ctx = static_cast<uint32_t>(llama_model_n_ctx_train(this->_model)); // 512
     cparams.n_ctx = n_ctx;
     cparams.n_batch = n_ctx;
     cparams.n_ubatch = n_ctx;
