@@ -19,7 +19,8 @@ std::shared_ptr<multilingual_e5> multilingual_e5::create(const std::vector<core:
     return p_instance;
 }
 
-std::vector<core::classification_result> multilingual_e5::classify(const core::classification_input& input) {
+std::vector<core::classification_result> multilingual_e5::classify(const core::classification_input& input,
+                                                                   core::common::span<int> candidate_category_ids) {
     const std::string& text = input.text;
     auto query_emb = this->_encode_text("passage: " + text);
     if (query_emb.empty())
@@ -36,7 +37,7 @@ std::vector<core::classification_result> multilingual_e5::classify(const core::c
 
     const double tau = (this->_temperature > 0.0f) ? this->_temperature : 0.01;
     constexpr double bg_similarity = 0.75;
-    return builtin::embedding_utils::temperature_softmax(raw_scores, tau, bg_similarity, input.candidate_category_ids);
+    return builtin::embedding_utils::temperature_softmax(raw_scores, tau, bg_similarity, candidate_category_ids);
 }
 
 multilingual_e5::~multilingual_e5() {

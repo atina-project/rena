@@ -15,7 +15,8 @@ namespace rena::core {
         public:
             virtual ~classifier_interface() = default;
 
-            virtual std::vector<classification_result> classify(const classification_input&) = 0;
+            virtual std::vector<classification_result> classify(const classification_input& input,
+                                                                common::span<int> candidate_category_ids = {}) = 0;
 
             virtual std::string_view get_model_name() const noexcept = 0;
             virtual common::span<lang> get_supported_langs() const noexcept = 0;

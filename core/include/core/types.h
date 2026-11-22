@@ -6,8 +6,6 @@
 #include <cstdint>
 #include <string>
 
-#include "core/common/span.h"
-
 namespace rena::core {
 
     // clang-format off
@@ -40,7 +38,6 @@ namespace rena::core {
         std::string text;
         std::string normalized_text;
         lang lang_hint = lang::UNKNOWN;
-        common::span<int> candidate_category_ids = {};
     }; // struct classification_input
 
     struct classification_result {
