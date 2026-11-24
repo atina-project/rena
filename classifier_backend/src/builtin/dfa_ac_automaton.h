@@ -126,11 +126,11 @@ namespace rena::classifier_backend::builtin {
                 }
 
                 const std::size_t n_nodes = trie.size();
-                if (static_cast<uint64_t>(n_nodes) >= static_cast<uint64_t>(HIT_BIT))
+                if (n_nodes > static_cast<std::size_t>(MAX_STATE_VAL) / this->_alphabet_size)
                 {
                     this->clear();
                     return false;
-                } // MSB of Tstate is reserved for HIT_BIT, so state count must be < 2^(bits-1)
+                } // _trans stores pre-multiplied row offsets (state_id * _alphabet_size), which must fit in Tstate
 
                 // Reorder node IDs in BFS order.
                 // This keeps shallow (frequently visited) states contiguous at the front of _trans for cache locality,
@@ -160,16 +160,16 @@ namespace rena::classifier_backend::builtin {
                     }
                 }
 
-                // Build full DFA transition table (_trans) and compute failure links (fail).
+                // Build temporary BFS-ordered DFA transition table (bfs_trans) and compute failure links (fail).
                 // Missing transitions are filled with fail-state transitions so match() needs no runtime fail loop.
 
-                this->_trans.assign(n_nodes * this->_alphabet_size, 0);
+                std::vector<Tstate> bfs_trans(n_nodes * this->_alphabet_size, 0);
                 std::vector<Tstate> fail(n_nodes, 0);
 
                 for (std::size_t new_node_id = 0; new_node_id < n_nodes; new_node_id++)
                 {
                     const Tstate old_node_id = bfs_order[new_node_id];
-                    Tstate* row = this->_trans.data() + new_node_id * this->_alphabet_size;
+                    Tstate* row = bfs_trans.data() + new_node_id * this->_alphabet_size;
                     for (const auto& [it_hex_id, it_old_child_id] : trie[old_node_id].children)
                     {
                         row[it_hex_id] = node_id_map[it_old_child_id];
@@ -181,9 +181,9 @@ namespace rena::classifier_backend::builtin {
 
                 for (std::size_t node_id = 1; node_id < n_nodes; node_id++)
                 {
-                    Tstate* row = this->_trans.data() + node_id * this->_alphabet_size;
+                    Tstate* row = bfs_trans.data() + node_id * this->_alphabet_size;
                     const Tstate* fail_row =
-                        this->_trans.data() + static_cast<std::size_t>(fail[node_id]) * this->_alphabet_size;
+                        bfs_trans.data() + static_cast<std::size_t>(fail[node_id]) * this->_alphabet_size;
                     for (uint32_t i = 0; i < this->_alphabet_size; i++)
                     {
                         if (row[i] != 0)
@@ -197,10 +197,25 @@ namespace rena::classifier_backend::builtin {
                     }
                 }
 
-                // Flatten hits per state (own hits + inherited suffix hits via fail links)
+                // Flatten hits per state (own hits + inherited suffix hits via fail links) in BFS order
                 // into a contiguous _hits pool so match() never chases fail links at runtime.
 
-                this->_hit_slices.resize(n_nodes);
+                std::vector<uint32_t> hit_counts(n_nodes, 0);
+                std::size_t total_hits = 0;
+                for (std::size_t node_id = 0; node_id < n_nodes; node_id++)
+                {
+                    uint32_t count = static_cast<uint32_t>(trie[bfs_order[node_id]].own_hits.size());
+                    if (node_id != 0)
+                    {
+                        count += hit_counts[fail[node_id]];
+                    }
+                    hit_counts[node_id] = count;
+                    total_hits += count;
+                }
+                this->_hits.reserve(total_hits);
+                // count total hits & reserve space
+
+                std::vector<hit_slice> bfs_hit_slices(n_nodes);
                 for (std::size_t node_id = 0; node_id < n_nodes; node_id++)
                 {
                     const uint32_t offset = static_cast<uint32_t>(this->_hits.size());
@@ -210,11 +225,9 @@ namespace rena::classifier_backend::builtin {
                     if (node_id != 0)
                     {
                         // fail[node_id] < node_id in BFS order, so its flattened slice is already populated.
-                        const auto fail_slice = this->_hit_slices[fail[node_id]];
+                        const auto fail_slice = bfs_hit_slices[fail[node_id]];
                         if (fail_slice.count > 0)
                         {
-                            this->_hits.reserve(this->_hits.size() + fail_slice.count);
-                            // pre-reserve to avoid reallocation while copying from earlier entries in _hits
                             for (uint32_t i = 0; i < fail_slice.count; i++)
                             {
                                 this->_hits.push_back(this->_hits[fail_slice.offset + i]);
@@ -223,16 +236,48 @@ namespace rena::classifier_backend::builtin {
                     }
 
                     const uint32_t count = static_cast<uint32_t>(this->_hits.size()) - offset;
-                    this->_hit_slices[node_id] = { offset, count };
+                    bfs_hit_slices[node_id] = { offset, count };
                 }
 
-                // Bake HIT_BIT into transition entries whose target state produces at least one hit.
-                // This lets match() skip accessing _hit_slices on non-matching bytes (hot/cold split).
-                for (Tstate& it_node : this->_trans)
+                // Partition states into [non-hit states | hit states] while preserving BFS order within each partition.
+                // Root (BFS ID 0) always has 0 hits, so it stays at final ID 0 (offset 0).
+                // Hit states sit at offsets >= _hit_threshold, eliminating runtime bitmasking in match().
+
+                std::vector<Tstate> bfs_to_final(n_nodes, 0);
+                std::size_t next_final_id = 0;
+                for (std::size_t bfs_id = 0; bfs_id < n_nodes; bfs_id++)
                 {
-                    if (this->_hit_slices[it_node].count > 0)
+                    if (bfs_hit_slices[bfs_id].count == 0)
                     {
-                        it_node |= HIT_BIT;
+                        bfs_to_final[bfs_id] = static_cast<Tstate>(next_final_id++);
+                    }
+                }
+                const std::size_t n_non_hit = next_final_id;
+                this->_hit_threshold = static_cast<Tstate>(n_non_hit * this->_alphabet_size);
+
+                this->_hit_slices.reserve(n_nodes - n_non_hit);
+                for (std::size_t bfs_id = 0; bfs_id < n_nodes; bfs_id++)
+                {
+                    if (bfs_hit_slices[bfs_id].count > 0)
+                    {
+                        bfs_to_final[bfs_id] = static_cast<Tstate>(next_final_id++);
+                        this->_hit_slices.push_back(bfs_hit_slices[bfs_id]);
+                    }
+                }
+
+                // Build final _trans table storing pre-multiplied row offsets (final_id * _alphabet_size),
+                // eliminating runtime multiplication in match().
+
+                this->_trans.assign(n_nodes * this->_alphabet_size, 0);
+                for (std::size_t bfs_id = 0; bfs_id < n_nodes; bfs_id++)
+                {
+                    const std::size_t final_id = bfs_to_final[bfs_id];
+                    const Tstate* src_row = bfs_trans.data() + bfs_id * this->_alphabet_size;
+                    Tstate* dst_row = this->_trans.data() + final_id * this->_alphabet_size;
+                    for (uint32_t i = 0; i < this->_alphabet_size; i++)
+                    {
+                        dst_row[i] = static_cast<Tstate>(static_cast<std::size_t>(bfs_to_final[src_row[i]]) *
+                                                         this->_alphabet_size);
                     }
                 }
 
@@ -248,19 +293,22 @@ namespace rena::classifier_backend::builtin {
                 const auto* text_data = reinterpret_cast<const uint8_t*>(text.data());
                 const std::size_t text_len = text.size();
                 const Tstate* trans = this->_trans.data();
+                const Tstate hit_threshold = this->_hit_threshold;
                 const std::size_t alphabet_size = this->_alphabet_size;
 
-                Tstate current_node = 0;
+                Tstate current_offset = 0;
                 for (std::size_t i = 0; i < text_len; i++)
                 {
-                    // Hot path: map raw byte to compressed class ID and perform a single DFA table lookup.
+                    // Hot path: map raw byte to class ID and index _trans directly (no bitmask, no multiply).
                     const uint8_t hex_id = this->_byte_map[text_data[i]];
-                    current_node = trans[static_cast<std::size_t>(current_node & STATE_MASK) * alphabet_size + hex_id];
+                    current_offset = trans[static_cast<std::size_t>(current_offset) + hex_id];
 
-                    // Cold path: only access _hit_slices and _hits when the destination state has hits.
-                    if ((current_node & HIT_BIT) != 0)
+                    // Cold path: hit states occupy offsets [hit_threshold, n_nodes * alphabet_size).
+                    if (current_offset >= hit_threshold)
                     {
-                        const auto& slice = this->_hit_slices[current_node & STATE_MASK];
+                        const std::size_t hit_idx =
+                            static_cast<std::size_t>(current_offset - hit_threshold) / alphabet_size;
+                        const auto& slice = this->_hit_slices[hit_idx];
                         for (uint32_t j = 0; j < slice.count; j++)
                         {
                             const auto& it_hit = this->_hits[slice.offset + j];
@@ -280,6 +328,7 @@ namespace rena::classifier_backend::builtin {
                     it_b = 0;
                 }
                 this->_alphabet_size = 1;
+                this->_hit_threshold = 0;
                 this->_trans.clear();
                 this->_hit_slices.clear();
                 this->_hits.clear();
@@ -287,9 +336,7 @@ namespace rena::classifier_backend::builtin {
             }
 
         private:
-            // MSB of each _trans entry marks whether the target state has hits; remaining bits store state ID.
-            static constexpr Tstate HIT_BIT = static_cast<Tstate>(Tstate(1) << (sizeof(Tstate) * 8 - 1));
-            static constexpr Tstate STATE_MASK = static_cast<Tstate>(~HIT_BIT);
+            static constexpr Tstate MAX_STATE_VAL = static_cast<Tstate>(~Tstate(0));
 
             // clang-format off
 
@@ -308,11 +355,14 @@ namespace rena::classifier_backend::builtin {
             // Hot data: accessed on every input byte during match()
             uint8_t _byte_map[256] = {}; // raw byte (0x00~0xFF) -> compressed class ID (0 = unseen)
             uint32_t _alphabet_size = 1; // number of compressed classes (including class 0)
-            std::vector<Tstate> _trans;  // flattened DFA table [n_nodes * _alphabet_size] in BFS state order
+            Tstate _hit_threshold = 0;   // first row offset of hit states; offsets >= _hit_threshold have hits
+            std::vector<Tstate>
+                _trans; // flattened DFA table [n_nodes * _alphabet_size] storing pre-multiplied row offsets
 
-            // Cold data: accessed only when HIT_BIT is set
-            std::vector<hit_slice> _hit_slices; // per-state slice into _hits, indexed by BFS state ID
-            std::vector<hit_entry> _hits;       // contiguous pool of all flattened pattern hits
+            // Cold data: accessed only when current_offset >= _hit_threshold
+            std::vector<hit_slice>
+                _hit_slices; // slices for hit states only, indexed by (offset - _hit_threshold) / _alphabet_size
+            std::vector<hit_entry> _hits; // contiguous pool of all flattened pattern hits
 
     }; // class dfa_ac_automaton
 
