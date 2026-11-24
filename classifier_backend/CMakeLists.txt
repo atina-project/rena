@@ -20,6 +20,8 @@ target_include_directories(${PROJECT_NAME}
         ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(${PROJECT_NAME}
+    PUBLIC
+        rena-core
     PRIVATE
         llama
 )

@@ -15,6 +15,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(RENA_BUILD_TESTS "Build test executables" ON)
 
 add_subdirectory(third_party)
+
+add_compile_options(-Wall -Wextra)
+
 add_subdirectory(core)
 add_subdirectory(classifier_backend)
 
